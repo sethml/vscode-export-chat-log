@@ -143,11 +143,14 @@ def find_rolled_back_request_ids(storage_path: str, session_id: str, all_request
     # This catches rollbacks after new prompts are added (VS Code deletes
     # the rolled-back checkpoints).  Retried failures also lack checkpoints
     # but classify_requests() already handles those with is_retried.
+    # Only apply if at least one checkpoint has a requestId; otherwise
+    # the heuristic is meaningless (e.g. only an "Initial State" checkpoint).
     if all_request_ids is not None:
         checkpoint_rids = {cp.get("requestId") for cp in checkpoints if cp.get("requestId")}
-        for rid in all_request_ids:
-            if rid not in checkpoint_rids:
-                rolled_back.add(rid)
+        if checkpoint_rids:
+            for rid in all_request_ids:
+                if rid not in checkpoint_rids:
+                    rolled_back.add(rid)
 
     return rolled_back
 
@@ -1390,6 +1393,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.wait is None:
         args.wait = not sys.stdin.isatty()
+        if args.wait:
+            print("Input is not a TTY, enabling --wait to capture in-progress responses", file=sys.stderr)
 
     global _project_root, _workspace_path, _force_insiders
     _project_root = args.project_root
