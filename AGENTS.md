@@ -20,9 +20,9 @@ Never git commit unless explicitly asked to do so.
 
 ## Chat Log Export
 
-After committing, run `export_chat_log.py </dev/null` to export the current chat session to `agent-logs/`. Do not use any flags. Then amend the commit to include the generated log file:
+After committing, run `export-chat-log.py </dev/null` to export the current chat session to `agent-logs/`. Do not use any flags. Then amend the commit to include the generated log file:
 ```
-python3 export_chat_log.py </dev/null
+python3 export-chat-log.py </dev/null
 git add agent-logs/
 git commit --amend --no-edit
 ```
