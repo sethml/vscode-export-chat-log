@@ -19,6 +19,10 @@ Never git commit unless explicitly asked to do so.
 - Annotate all function signatures with parameter and return types.
 - Avoid backslashes inside f-string expressions (not supported in Python 3.9).
 
+## Before Committing
+
+Before committing, check for Pylance errors and warnings by using the `get_errors` tool on `export-chat-log.py`. There should be zero errors and zero warnings. Fix any that appear before proceeding.
+
 ## Chat Log Export
 
 After committing, run `export-chat-log.py` to export the current chat session to `agent-logs/`. Do not use any flags. Then amend the commit to include the generated log file:

@@ -41,8 +41,7 @@ def _vscode_data_dirs() -> list[str]:
     Checks TERM_PROGRAM_VERSION to prefer Insiders when running inside it.
     Supports macOS, Linux, and Windows.
     """
-    is_insiders = _force_insiders or "insider" in os.environ.get("TERM_PROGRAM_VERSION", "").lower()
-    variants = ["Code - Insiders", "Code"] if is_insiders else ["Code", "Code - Insiders"]
+    variants = ["Code - Insiders", "Code"] if _force_insiders else ["Code", "Code - Insiders"]
 
     platform = sys.platform
     dirs: list[str] = []
@@ -1390,6 +1389,7 @@ def main() -> None:
     parser.add_argument("--list", "-l", action="store_true", help="List available sessions")
     parser.add_argument("--wait", action="store_true", default=None, help="Wait for JSONL flush before exporting (default: on if stdin is not a TTY)")
     parser.add_argument("--insiders", action="store_true", help="Force using VS Code Insiders data directory")
+    parser.add_argument("--no-insiders", action="store_true", help="Do not use VS Code Insiders data directory (overrides TERM_PROGRAM_VERSION detection)")
     args = parser.parse_args()
     if args.wait is None:
         args.wait = not sys.stdin.isatty()
@@ -1399,7 +1399,12 @@ def main() -> None:
     global _project_root, _workspace_path, _force_insiders
     _project_root = args.project_root
     _workspace_path = os.path.abspath(args.workspace)
-    _force_insiders = args.insiders
+    if args.insiders:
+        _force_insiders = True
+    elif args.no_insiders:
+        _force_insiders = False
+    else:
+        _force_insiders = "insider" in os.environ.get("TERM_PROGRAM_VERSION", "").lower()
 
     workspace = os.path.abspath(args.workspace)
     storage_path = find_workspace_storage(workspace)
