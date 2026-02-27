@@ -23,7 +23,7 @@ Never git commit unless explicitly asked to do so.
 
 After committing, run `export-chat-log.py` to export the current chat session to `agent-logs/`. Do not use any flags. Then amend the commit to include the generated log file:
 ```
-python3 export-chat-log.py
+python3 export-chat-log.py </dev/null
 git add agent-logs/
 git commit --amend --no-edit
 ```

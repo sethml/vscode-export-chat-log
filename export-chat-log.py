@@ -1385,11 +1385,11 @@ def main() -> None:
     parser.add_argument("--workspace", "-w", default=".", help="Workspace root directory")
     parser.add_argument("--project-root", default="..", help="Path from output dir to project root, prepended to relative links (default: '..')")
     parser.add_argument("--list", "-l", action="store_true", help="List available sessions")
-    parser.add_argument("--wait", action="store_true", default=None, help="Wait for JSONL flush before exporting (default: on if stdin is a TTY)")
+    parser.add_argument("--wait", action="store_true", default=None, help="Wait for JSONL flush before exporting (default: on if stdin is not a TTY)")
     parser.add_argument("--insiders", action="store_true", help="Force using VS Code Insiders data directory")
     args = parser.parse_args()
     if args.wait is None:
-        args.wait = sys.stdin.isatty()
+        args.wait = not sys.stdin.isatty()
 
     global _project_root, _workspace_path, _force_insiders
     _project_root = args.project_root
