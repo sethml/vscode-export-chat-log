@@ -22,9 +22,8 @@ import sqlite3
 import sys
 import time
 from datetime import datetime
-from pathlib import Path
 from urllib.parse import unquote
-from typing import Any
+from typing import Any, cast
 
 # Prepended to workspace-relative links; set via --project-root (default "..")
 _project_root = ".."
@@ -46,7 +45,7 @@ def _vscode_data_dirs() -> list[str]:
     variants = ["Code - Insiders", "Code"] if is_insiders else ["Code", "Code - Insiders"]
 
     platform = sys.platform
-    dirs = []
+    dirs: list[str] = []
     for variant in variants:
         if platform == "darwin":
             base = os.path.expanduser(f"~/Library/Application Support/{variant}")
@@ -116,12 +115,12 @@ def find_rolled_back_request_ids(storage_path: str, session_id: str, all_request
         storage_path, "chatEditingSessions", session_id, "state.json"
     )
     if not os.path.isfile(state_path):
-        return set()
+        return set[str]()
     try:
         with open(state_path) as f:
             data = json.load(f)
     except (json.JSONDecodeError, IOError):
-        return set()
+        return set[str]()
 
     timeline = data.get("timeline", {})
     cur_epoch = timeline.get("currentEpoch")
@@ -130,7 +129,7 @@ def find_rolled_back_request_ids(storage_path: str, session_id: str, all_request
     if not checkpoints:
         return set()
 
-    rolled_back = set()
+    rolled_back: set[str] = set()
 
     # Method 1: epoch-based — checkpoints with epoch >= currentEpoch
     if cur_epoch is not None:
@@ -204,8 +203,8 @@ def fingerprint_part(part: dict[str, Any]) -> tuple[str, ...] | None:
         return ("tool_hash", hashlib.md5(json.dumps(part, sort_keys=True).encode()).hexdigest())
 
     if kind == "textEditGroup":
-        uri = part.get("uri", {})
-        path = uri.get("path", "") if isinstance(uri, dict) else str(uri)
+        uri: Any = part.get("uri", {})
+        path: str = str(cast(dict[str, Any], uri).get("path", "")) if isinstance(uri, dict) else str(uri)
         return ("edit", path)
 
     if kind == "inlineReference":
@@ -225,21 +224,21 @@ def fingerprint_part(part: dict[str, Any]) -> tuple[str, ...] | None:
         return None
 
     # Text part
-    val = part.get("value", "")
+    val: Any = part.get("value", "")
     if isinstance(val, dict):
-        val = val.get("value", "")
-    if not val or not val.strip():
+        val = str(cast(dict[str, Any], val).get("value", ""))
+    if not val or not str(val).strip():
         return None
-    return ("text", hashlib.md5(val.encode()).hexdigest())
+    return ("text", hashlib.md5(str(val).encode()).hexdigest())
 
 
 def stitch_response_windows(windows: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """Merge overlapping response windows into a single ordered part list."""
-    seen = {}   # fingerprint -> index in result
-    result = []
+    seen: dict[tuple[str, ...], int] = {}   # fingerprint -> index in result
+    result: list[dict[str, Any]] = []
     for window in windows:
         for part in window:
-            kind = part.get("kind", "") if isinstance(part, dict) else ""
+            kind = part.get("kind", "")
             if kind == "inlineReference":
                 result.append(part)
                 continue
@@ -257,54 +256,58 @@ def stitch_response_windows(windows: list[list[dict[str, Any]]]) -> list[dict[st
 
 def replay_jsonl(filepath: str) -> dict[str, Any]:
     """Replay the JSONL to reconstruct the full session state."""
-    session_state = {}
-    requests_by_id = {}
-    request_order = []
-    response_windows = {}   # rid -> list of (seq, window) pairs
+    session_state: dict[str, Any] = {}
+    requests_by_id: dict[str, dict[str, Any]] = {}
+    request_order: list[str] = []
+    response_windows: dict[str, list[tuple[int, list[dict[str, Any]]]]] = {}   # rid -> list of (seq, window) pairs
     # Track sequence numbers for interjection detection
     seq = 0
-    request_submit_seq = {}   # rid -> seq when request was submitted
+    request_submit_seq: dict[str, int] = {}   # rid -> seq when request was submitted
     # Track result/modelState/followups writes with their seq and origin index
-    result_writes = []        # list of (seq, idx, value)
-    model_state_writes = []   # list of (seq, idx, value)
-    followups_writes = []     # list of (seq, idx, value)
+    result_writes: list[tuple[int, int, dict[str, Any]]] = []        # list of (seq, idx, value)
+    model_state_writes: list[tuple[int, int, Any]] = []   # list of (seq, idx, value)
+    followups_writes: list[tuple[int, int, Any]] = []     # list of (seq, idx, value)
 
     with open(filepath) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            data = json.loads(line)
-            kind = data.get("kind")
-            keys = data.get("k", [])
-            v = data.get("v")
+            data: dict[str, Any] = json.loads(line)
+            kind: Any = data.get("kind")
+            keys: list[Any] = data.get("k", [])
+            v: Any = data.get("v")
             seq += 1
 
             if kind == 0:
-                session_state = v
+                if isinstance(v, dict):
+                    session_state = cast(dict[str, Any], v)
+                else:
+                    session_state = {}
                 for req in session_state.get("requests", []):
-                    rid = req.get("requestId")
+                    rid: str = req.get("requestId", "")
                     if rid and rid not in requests_by_id:
                         requests_by_id[rid] = req
                         request_order.append(rid)
                         request_submit_seq[rid] = seq
-                        resp = req.get("response", [])
-                        if resp:
-                            response_windows.setdefault(rid, []).append((seq, resp))
+                        resp_val: Any = req.get("response", [])
+                        if resp_val:
+                            response_windows.setdefault(rid, []).append((seq, resp_val))
 
             elif kind == 2 and keys == ["requests"]:
                 if isinstance(v, list):
-                    for req in v:
-                        if not isinstance(req, dict):
+                    for req_item in cast(list[Any], v):
+                        if not isinstance(req_item, dict):
                             continue
-                        rid = req.get("requestId")
+                        req: dict[str, Any] = cast(dict[str, Any], req_item)
+                        rid = str(req.get("requestId", ""))
                         if not rid:
                             continue
                         if rid not in requests_by_id:
                             request_order.append(rid)
                             request_submit_seq[rid] = seq
                         requests_by_id[rid] = req
-                        resp = req.get("response", [])
+                        resp: list[dict[str, Any]] = list(cast(list[Any], req.get("response", [])))
                         if resp:
                             response_windows.setdefault(rid, []).append((seq, resp))
 
@@ -316,20 +319,21 @@ def replay_jsonl(filepath: str) -> dict[str, Any]:
                     and len(keys) >= 2
                     and isinstance(keys[1], int)
                 ):
-                    idx = keys[1]
+                    idx: int = keys[1]
                     if idx < len(request_order):
                         rid = request_order[idx]
-                        target = requests_by_id[rid]
-                        sub_keys = keys[2:]
+                        target: dict[str, Any] = requests_by_id[rid]
+                        sub_keys: list[Any] = keys[2:]
 
                         if sub_keys == ["response"] and isinstance(v, list):
-                            response_windows.setdefault(rid, []).append((seq, v))
-                            target["response"] = v
+                            window: list[dict[str, Any]] = cast(list[dict[str, Any]], v)
+                            response_windows.setdefault(rid, []).append((seq, window))
+                            target["response"] = window
                             continue
 
                         # Track result/modelState/followups writes
                         if sub_keys == ["result"] and isinstance(v, dict):
-                            result_writes.append((seq, idx, v))
+                            result_writes.append((seq, idx, cast(dict[str, Any], v)))
                         elif sub_keys == ["modelState"]:
                             model_state_writes.append((seq, idx, v))
                         elif sub_keys == ["followups"]:
@@ -349,14 +353,15 @@ def replay_jsonl(filepath: str) -> dict[str, Any]:
     return session_state
 
 
-def _apply_nested_update(obj: Any, keys: list[str | int], value: Any) -> None:
+def _apply_nested_update(obj: Any, keys: list[Any], value: Any) -> None:
     """Apply a nested key-path update to obj."""
     for i, k in enumerate(keys[:-1]):
         if isinstance(k, int):
             if isinstance(obj, list):
-                while len(obj) <= k:
-                    obj.append({})
-                obj = obj[k]
+                obj_l: list[Any] = cast(list[Any], obj)
+                while len(obj_l) <= k:
+                    obj_l.append({})
+                obj = obj_l[k]
             else:
                 return
         else:
@@ -367,9 +372,10 @@ def _apply_nested_update(obj: Any, keys: list[str | int], value: Any) -> None:
     last = keys[-1]
     if isinstance(last, int):
         if isinstance(obj, list):
-            while len(obj) <= last:
-                obj.append(None)
-            obj[last] = value
+            obj_l2: list[Any] = cast(list[Any], obj)
+            while len(obj_l2) <= last:
+                obj_l2.append(None)
+            obj_l2[last] = value
     else:
         if isinstance(obj, dict):
             obj[last] = value
@@ -415,7 +421,7 @@ def _reassign_interjections(
 
     # --- Reassign response windows ---
     # Collect all (seq, window) pairs from all requests
-    all_windows = []  # (seq, window)
+    all_windows: list[tuple[int, list[dict[str, Any]]]] = []  # (seq, window)
     for rid in request_order:
         for seq_num, window in response_windows.get(rid, []):
             all_windows.append((seq_num, window))
@@ -424,7 +430,7 @@ def _reassign_interjections(
     all_windows.sort(key=lambda x: x[0])
 
     # Assign each window to its correct owner
-    new_windows = {rid: [] for rid in request_order}
+    new_windows: dict[str, list[list[dict[str, Any]]]] = {rid: [] for rid in request_order}
     for seq_num, window in all_windows:
         owner = find_owner(seq_num)
         new_windows[owner].append(window)
@@ -446,12 +452,13 @@ def _reassign_interjections(
     def reassign_field(writes: list[tuple[int, int, Any]], field_name: str, skip_canceled: bool = True) -> None:
         """Reassign a field based on JSONL write sequence numbers."""
         # Collect (seq, idx, value) -> assign to correct owner
-        assignments = {}  # rid -> (seq, value) — keep latest by seq
+        assignments: dict[str, tuple[int, Any]] = {}  # rid -> (seq, value) — keep latest by seq
         for seq_num, idx, value in writes:
             # Cancel results stay on their original request
             if skip_canceled and field_name == "result" and isinstance(value, dict):
-                err = value.get("errorDetails", {})
-                if isinstance(err, dict) and err.get("code") == "canceled":
+                val_d: dict[str, Any] = cast(dict[str, Any], value)
+                err: Any = val_d.get("errorDetails", {})
+                if isinstance(err, dict) and cast(dict[str, Any], err).get("code") == "canceled":
                     if idx < len(request_order):
                         orig_rid = request_order[idx]
                         if orig_rid not in assignments or assignments[orig_rid][0] < seq_num:
@@ -476,12 +483,12 @@ def _reassign_interjections(
 # Text extraction helpers
 # ---------------------------------------------------------------------------
 
-def extract_text(val: str | dict[str, Any]) -> str:
+def extract_text(val: Any) -> str:
     """Extract plain text from a value that may be a string or {value: ...}."""
     if isinstance(val, str):
         return val
     if isinstance(val, dict):
-        return val.get("value", "")
+        return str(cast(dict[str, Any], val).get("value", ""))
     return ""
 
 
@@ -510,12 +517,14 @@ def make_link_path(p: str) -> str:
 
 def extract_path_from_uris(msg_obj: dict[str, Any]) -> str | None:
     """Extract a shortened file path from a message object with uris."""
-    if not isinstance(msg_obj, dict):
+    uris: Any = msg_obj.get("uris", {})
+    if not isinstance(uris, dict):
         return None
-    uris = msg_obj.get("uris", {})
-    for uri_key, uri_obj in uris.items():
+    uris_d: dict[str, Any] = cast(dict[str, Any], uris)
+    for _uri_key, uri_obj in uris_d.items():
         if isinstance(uri_obj, dict):
-            p = uri_obj.get("path", "")
+            uri_obj_d: dict[str, Any] = cast(dict[str, Any], uri_obj)
+            p: str = str(uri_obj_d.get("path", ""))
             if p:
                 return shorten_path(p)
     return None
@@ -523,7 +532,7 @@ def extract_path_from_uris(msg_obj: dict[str, Any]) -> str | None:
 
 def clean_message_links(msg: str) -> str:
     """Replace file:/// markdown links with proper relative/absolute links."""
-    def _sub(m):
+    def _sub(m: re.Match[str]) -> str:
         text = m.group(1)
         # file:/// has 3 slashes; the captured group after file:/// is missing the
         # leading slash for absolute paths, so restore it.
@@ -541,8 +550,8 @@ def clean_message_links(msg: str) -> str:
 
 def linkify_paths_in_message(msg: str) -> str:
     """Convert backtick-wrapped workspace paths to markdown links with the basename."""
-    def _replace(m):
-        path = m.group(1)
+    def _replace(m: re.Match[str]) -> str:
+        path: str = m.group(1)
         display_path = re.sub(r'#.*$', '', path)
         basename = os.path.basename(display_path) or display_path
         link = make_link_path(path) if not path.startswith('/') and not path.startswith('~') else path
@@ -571,7 +580,7 @@ def humanize_model_id(model_id: str) -> str:
         return "Auto"
     # Capitalize each part: claude-opus-4.6 -> Claude Opus 4.6
     parts = name.split("-")
-    result = []
+    result: list[str] = []
     for part in parts:
         # Keep version numbers as-is
         if re.match(r'^\d', part):
@@ -618,7 +627,7 @@ def escape_link_text(text: str) -> str:
 
 def md_to_summary_html(text: str) -> str:
     """Convert markdown-formatted text to HTML safe for use inside <summary> tags."""
-    result = []
+    result: list[str] = []
     pos = 0
     for m in re.finditer(r'\[([^\]]*)\]\(([^)]*)\)|`([^`]+)`', text):
         result.append(html.escape(text[pos:m.start()]))
@@ -635,7 +644,7 @@ def strip_ansi(text: str) -> str:
     """Strip ANSI escape codes and simulate carriage-return overwriting."""
     # Simulate CR overwrite: keep last non-empty \r-segment per line
     # (trailing \r leaves an empty final segment that we skip)
-    def _cr_last(seg):
+    def _cr_last(seg: str) -> str:
         for p in reversed(seg.split('\r')):
             if p:
                 return p
@@ -647,8 +656,8 @@ def strip_ansi(text: str) -> str:
 
 def format_list_result(tool_id: str, result_list: list[dict[str, Any]]) -> list[str]:
     """Format a list of URI/match results into markdown list lines."""
-    lines = []
-    seen = set()
+    lines: list[str] = []
+    seen: set[str] = set()
     for item in result_list:
         if tool_id == "copilot_findFiles":
             path = item.get("path", item.get("fsPath", ""))
@@ -683,7 +692,7 @@ def format_hashline_output(result_details: dict[str, Any]) -> list[str]:
     raw = outputs[0].get("value", "") if isinstance(outputs[0], dict) else str(outputs[0])
     if not raw:
         return []
-    content_lines = []
+    content_lines: list[str] = []
     for line in raw.split("\n"):
         m = re.match(r'^\d+:[a-z]+\|(.*)$', line)
         content_lines.append(m.group(1) if m else line)
@@ -706,7 +715,7 @@ def format_hashline_output(result_details: dict[str, Any]) -> list[str]:
 
 def format_result_details(result_details: dict[str, Any]) -> list[str]:
     """Format resultDetails as input/output content for inside a collapsed section."""
-    if not isinstance(result_details, dict):
+    if not isinstance(result_details, dict):  # type: ignore[redundant-cast]
         return []
     inp = result_details.get("input", "")
     outputs = result_details.get("output", [])
@@ -714,24 +723,26 @@ def format_result_details(result_details: dict[str, Any]) -> list[str]:
     if not inp and not outputs:
         return []
 
-    lines = []
+    lines: list[str] = []
     if is_error:
         lines.append("**(error)**")
     if inp:
-        inp_display = shorten_paths_in_text(inp[:3000])
-        inp_fence = fence_for(inp_display)
+        inp_str: str = str(inp)
+        inp_display: str = shorten_paths_in_text(inp_str[:3000])
+        inp_fence: str = fence_for(inp_display)
         lines.append("**Input:**")
         lines.append(inp_fence)
         lines.append(inp_display)
-        if len(inp) > 3000:
-            lines.append(f"... (truncated, {len(inp)} chars)")
+        if len(inp_str) > 3000:
+            lines.append(f"... (truncated, {len(inp_str)} chars)")
         lines.append(inp_fence)
     for out_item in outputs:
         if isinstance(out_item, dict):
-            val = out_item.get("value", "")
+            out_d: dict[str, Any] = cast(dict[str, Any], out_item)
+            val: str = str(out_d.get("value", ""))
             if val:
-                val_display = shorten_paths_in_text(val[:3000])
-                val_fence = fence_for(val_display)
+                val_display: str = shorten_paths_in_text(val[:3000])
+                val_fence: str = fence_for(val_display)
                 lines.append("**Output:**")
                 lines.append(val_fence)
                 lines.append(val_display)
@@ -744,20 +755,22 @@ def format_result_details(result_details: dict[str, Any]) -> list[str]:
 def format_tool_call(part: dict[str, Any]) -> list[str]:
     """Format a tool call into readable markdown lines."""
     tool_id = part.get("toolId", "")
-    tsd = part.get("toolSpecificData", {})
-    result_details = part.get("resultDetails", {})
-    msg = get_tool_message(part)
-    lines = []
+    tsd: Any = part.get("toolSpecificData", {})
+    result_details: Any = part.get("resultDetails", {})
+    msg: str = get_tool_message(part)
+    lines: list[str] = []
 
     # --- Terminal commands ---
     if tool_id == "run_in_terminal" and isinstance(tsd, dict):
-        cmd_data = tsd.get("commandLine", {})
+        tsd_d: dict[str, Any] = cast(dict[str, Any], tsd)
+        cmd_data: Any = tsd_d.get("commandLine", {})
         cmd = ""
         if isinstance(cmd_data, dict):
-            cmd = cmd_data.get("original", "") or cmd_data.get("toolEdited", "")
+            cmd_d: dict[str, Any] = cast(dict[str, Any], cmd_data)
+            cmd = str(cmd_d.get("original", "") or cmd_d.get("toolEdited", ""))
         elif isinstance(cmd_data, str):
             cmd = cmd_data
-        cmd = cmd.strip()
+        cmd = str(cmd).strip()
         if not cmd:
             return []
 
@@ -767,13 +780,13 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
         lines.append(cmd)
         lines.append(_cmd_fence)
 
-        output_data = tsd.get("terminalCommandOutput", {})
-        output_text = output_data.get("text", "") if isinstance(output_data, dict) else ""
-        state_data = tsd.get("terminalCommandState", {})
-        exit_code = state_data.get("exitCode") if isinstance(state_data, dict) else None
+        output_data: Any = tsd_d.get("terminalCommandOutput", {})
+        output_text: str = str(cast(dict[str, Any], output_data).get("text", "")) if isinstance(output_data, dict) else ""
+        state_data: Any = tsd_d.get("terminalCommandState", {})
+        exit_code: Any = cast(dict[str, Any], state_data).get("exitCode") if isinstance(state_data, dict) else None
 
         if output_text:
-            output_lines = output_text.rstrip().split("\n")
+            output_lines: list[str] = output_text.rstrip().split("\n")
             max_output = 3000
             truncated = len(output_text) > max_output
             display = strip_ansi(output_text[:max_output].rstrip())
@@ -805,13 +818,13 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
 
     # --- Todo list ---
     if tool_id == "manage_todo_list":
-        if isinstance(tsd, dict) and tsd.get("kind") == "todoList":
-            todos = tsd.get("todoList", [])
+        if isinstance(tsd, dict) and cast(dict[str, Any], tsd).get("kind") == "todoList":
+            todos: Any = cast(dict[str, Any], tsd).get("todoList", [])
             if todos:
                 lines.append("**Todo list:**")
-                for todo in todos:
-                    status = todo.get("status", "not-started")
-                    title = todo.get("title", "")
+                for todo in cast(list[Any], todos):
+                    status: str = str(cast(dict[str, Any], todo).get("status", "not-started"))
+                    title: str = str(cast(dict[str, Any], todo).get("title", ""))
                     icon = {"completed": "✅", "in-progress": "🔄", "not-started": "⬜"}.get(status, "⬜")
                     lines.append(f"- {icon} {title}")
                 return lines
@@ -821,7 +834,7 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
 
     # --- runSubagent: result text in toolSpecificData ---
     if tool_id == "runSubagent":
-        result_text = tsd.get("result", "") if isinstance(tsd, dict) else ""
+        result_text: str = str(cast(dict[str, Any], tsd).get("result", "")) if isinstance(tsd, dict) else ""
         summary_text = msg or "Run subagent"
         if result_text:
             lines.append("<details>")
@@ -837,7 +850,7 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
     # --- File/text search with list results ---
     if tool_id in ("copilot_findFiles", "copilot_findTextInFiles") and isinstance(result_details, list):
         summary_text = msg or f"Used tool: {tool_id}"
-        file_lines = format_list_result(tool_id, result_details)
+        file_lines: list[str] = format_list_result(tool_id, cast(list[dict[str, Any]], result_details))
         if file_lines and len(file_lines) > 4:
             lines.append("<details>")
             lines.append(f"<summary>{md_to_summary_html(summary_text)}</summary>")
@@ -854,7 +867,7 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
     # --- hashline_read: clean hash-prefixed line output ---
     if tool_id == "hashline_read" and isinstance(result_details, dict):
         summary_text = msg or "Read file"
-        clean_lines = format_hashline_output(result_details)
+        clean_lines: list[str] = format_hashline_output(cast(dict[str, Any], result_details))
         if clean_lines:
             lines.append("<details>")
             lines.append(f"<summary>{md_to_summary_html(summary_text)}</summary>")
@@ -866,7 +879,7 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
         return lines
 
     # --- All other tools: use the message as summary of collapsed input/output ---
-    detail_lines = format_result_details(result_details)
+    detail_lines: list[str] = format_result_details(cast(dict[str, Any], result_details) if isinstance(result_details, dict) else {})
     summary_text = msg or f"Used tool: {tool_id}"
 
     if detail_lines:
@@ -905,9 +918,9 @@ def format_inline_ref(part: dict[str, Any]) -> str:
     name = part.get("name", "")
     if name:
         return f"`{name}`"
-    ref = part.get("inlineReference", {})
+    ref: Any = part.get("inlineReference", {})
     if isinstance(ref, dict):
-        p = ref.get("path", "")
+        p: str = str(cast(dict[str, Any], ref).get("path", ""))
         if p:
             return f"`{shorten_path(p)}`"
     return ""
@@ -937,15 +950,16 @@ def classify_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
       - is_retried: True if a failed request is followed by a retry with same prompt
       - turn_num: display turn number (sequential, skipping retried failures)
     """
-    classified = []
+    classified: list[dict[str, Any]] = []
     for i, req in enumerate(requests):
-        result = req.get("result", {})
+        result: Any = req.get("result", {})
         if not isinstance(result, dict):
             result = {}
-        error = result.get("errorDetails", {})
+        result_d: dict[str, Any] = cast(dict[str, Any], result) if isinstance(result, dict) else {}
+        error: Any = result_d.get("errorDetails", {})
         if not isinstance(error, dict):
             error = {}
-        error_code = error.get("code", "")
+        error_code: str = str(cast(dict[str, Any], error).get("code", "") if isinstance(error, dict) else "")
 
         if error_code == "failed":
             status = "failed"
@@ -983,9 +997,9 @@ def classify_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _get_prompt_text(req: dict[str, Any]) -> str:
-    msg = req.get("message", {})
+    msg: Any = req.get("message", {})
     if isinstance(msg, dict):
-        return msg.get("text", "").strip()
+        return str(cast(dict[str, Any], msg).get("text", "")).strip()
     elif isinstance(msg, str):
         return msg.strip()
     return ""
@@ -996,7 +1010,7 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
     source_mtime: mtime of the JSONL file (epoch seconds), used to estimate
                   duration for in-progress requests.
     """
-    out = []
+    out: list[str] = []
     if rolled_back_ids is None:
         rolled_back_ids = set()
 
@@ -1026,26 +1040,30 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
     total_input_words = 0
     total_output_words = 0
     total_elapsed_ms = 0
-    models_used = set()
+    models_used: set[str] = set()
     for c in visible:
         req = c["req"]
         model_name = get_request_model(req)
         if model_name:
             models_used.add(model_name)
-        meta = req.get("result", {}).get("metadata", {})
+        meta_raw: Any = req.get("result", {})
+        meta: Any = cast(dict[str, Any], meta_raw).get("metadata", {}) if isinstance(meta_raw, dict) else {}
         if isinstance(meta, dict):
-            if meta.get("promptTokens"):
-                total_prompt_tokens += meta["promptTokens"]
-            rounds = meta.get("toolCallRounds", [])
-            total_rounds += max(len(rounds), 1) if rounds or meta.get("promptTokens") else 0
-        timings = req.get("result", {}).get("timings", {})
-        if isinstance(timings, dict) and timings.get("totalElapsed"):
-            total_elapsed_ms += timings["totalElapsed"]
-        for part in req.get("response", []):
+            meta_d2: dict[str, Any] = cast(dict[str, Any], meta)
+            if meta_d2.get("promptTokens"):
+                total_prompt_tokens += int(meta_d2["promptTokens"])
+            rounds: Any = meta_d2.get("toolCallRounds", [])
+            total_rounds += max(len(cast(list[Any], rounds)), 1) if rounds or meta_d2.get("promptTokens") else 0
+        timings_raw: Any = req.get("result", {})
+        timings: Any = cast(dict[str, Any], timings_raw).get("timings", {}) if isinstance(timings_raw, dict) else {}
+        if isinstance(timings, dict) and cast(dict[str, Any], timings).get("totalElapsed"):
+            total_elapsed_ms += int(cast(dict[str, Any], timings)["totalElapsed"])
+        for part in cast(list[Any], req.get("response", [])):
             if isinstance(part, dict):
-                if part.get("kind") == "toolInvocationSerialized":
+                part_d: dict[str, Any] = cast(dict[str, Any], part)
+                if part_d.get("kind") == "toolInvocationSerialized":
                     total_tool_calls += 1
-                if part.get("kind") == "thinking":
+                if part_d.get("kind") == "thinking":
                     total_thinking += 1
 
     model_label = "Models" if len(models_used) > 1 else "Model"
@@ -1057,9 +1075,10 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         req = c["req"]
         req_ts = req.get("timestamp", 0)
         req_elapsed = 0
-        timings = req.get("result", {}).get("timings", {})
-        if isinstance(timings, dict) and timings.get("totalElapsed"):
-            req_elapsed = timings["totalElapsed"]
+        timings_raw2: Any = req.get("result", {})
+        timings2: Any = cast(dict[str, Any], timings_raw2).get("timings", {}) if isinstance(timings_raw2, dict) else {}
+        if isinstance(timings2, dict) and cast(dict[str, Any], timings2).get("totalElapsed"):
+            req_elapsed = cast(dict[str, Any], timings2)["totalElapsed"]
         elif c["status"] == "incomplete" and req_ts and source_mtime:
             req_elapsed = source_mtime * 1000 - req_ts
         if req_ts:
@@ -1144,14 +1163,16 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
 
         req_ts = req.get("timestamp", 0)
         req_dt = datetime.fromtimestamp(req_ts / 1000) if req_ts else None
-        req_timings = req.get("result", {}).get("timings", {})
-        req_elapsed_ms = req_timings.get("totalElapsed") if isinstance(req_timings, dict) else None
+        req_timings_raw: Any = req.get("result", {})
+        req_timings: Any = cast(dict[str, Any], req_timings_raw).get("timings", {}) if isinstance(req_timings_raw, dict) else {}
+        req_elapsed_ms: Any = cast(dict[str, Any], req_timings).get("totalElapsed") if isinstance(req_timings, dict) else None
         # For incomplete requests, estimate elapsed from file mtime
         if req_elapsed_ms is None and c["status"] == "incomplete" and req_ts and source_mtime:
             req_elapsed_ms = source_mtime * 1000 - req_ts
-        req_meta = req.get("result", {}).get("metadata", {})
-        req_pt = req_meta.get("promptTokens") if isinstance(req_meta, dict) else None
-        req_rounds = len(req_meta.get("toolCallRounds", [])) if isinstance(req_meta, dict) else 0
+        req_meta_raw: Any = req.get("result", {})
+        req_meta: Any = cast(dict[str, Any], req_meta_raw).get("metadata", {}) if isinstance(req_meta_raw, dict) else {}
+        req_pt: Any = cast(dict[str, Any], req_meta).get("promptTokens") if isinstance(req_meta, dict) else None
+        req_rounds: int = len(cast(list[Any], cast(dict[str, Any], req_meta).get("toolCallRounds", []))) if isinstance(req_meta, dict) else 0
 
         anchor = make_gfm_anchor(f"User ({turn_idx})")
         out.append(f'<a id="{anchor}"></a>')
@@ -1191,9 +1212,9 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         out.append(f"### Assistant{model_suffix}")
         out.append("")
         # Accumulate text runs (text + inline refs) and flush on tool calls / thinking
-        text_run = []
+        text_run: list[str] = []
 
-        def flush_text_run():
+        def flush_text_run() -> None:
             if text_run:
                 merged = "".join(text_run).strip()
                 if merged:
@@ -1201,11 +1222,12 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
                     out.append("")
                 text_run.clear()
 
-        for part in response:
+        for part in cast(list[Any], response):
             if not isinstance(part, dict):
                 continue
 
-            part_kind = part.get("kind", "")
+            part_d2: dict[str, Any] = cast(dict[str, Any], part)
+            part_kind = part_d2.get("kind", "")
 
             if part_kind in ("mcpServersStarting", "textEditGroup"):
                 continue
@@ -1213,48 +1235,50 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
             # Thinking blocks — render as collapsed sections
             if part_kind == "thinking":
                 flush_text_run()
-                think_lines = format_thinking_block(part)
+                think_lines: list[str] = format_thinking_block(part_d2)
                 if think_lines:
                     for line in think_lines:
                         out.append(line)
                     out.append("")
-                think_text = part.get("value", "")
+                think_text: str = str(part_d2.get("value", ""))
                 turn_output_words += len(think_text.split()) if think_text else 0
                 continue
 
             # Inline reference — merge into text run
             if part_kind == "inlineReference":
-                ref_text = format_inline_ref(part)
+                ref_text: str = format_inline_ref(part_d2)
                 if ref_text:
                     text_run.append(ref_text)
                 continue
 
             # Tool call — flush text, then render tool
-            tool_id = part.get("toolId", "")
+            tool_id: str = str(part_d2.get("toolId", ""))
             if part_kind == "toolInvocationSerialized" or (tool_id and part_kind != ""):
                 flush_text_run()
-                tool_lines = format_tool_call(part)
+                tool_lines: list[str] = format_tool_call(part_d2)
                 if tool_lines:
                     for line in tool_lines:
                         out.append(line)
                     out.append("")
                 # Tool output = input words (counted from response parts)
-                rd = part.get("resultDetails", {})
+                rd: Any = part_d2.get("resultDetails", {})
                 if isinstance(rd, dict):
-                    for out_item in rd.get("output", []):
+                    rd_d: dict[str, Any] = cast(dict[str, Any], rd)
+                    for out_item in cast(list[Any], rd_d.get("output", [])):
                         if isinstance(out_item, dict):
-                            val = out_item.get("value", "")
-                            turn_input_words += len(val.split()) if val else 0
+                            val_s: str = str(cast(dict[str, Any], out_item).get("value", ""))
+                            turn_input_words += len(val_s.split()) if val_s else 0
                 elif isinstance(rd, list):
-                    for item in rd:
+                    for item in cast(list[Any], rd):
                         if isinstance(item, dict):
-                            val = item.get("value", "") or item.get("path", "")
-                            turn_input_words += len(str(val).split()) if val else 0
+                            item_d: dict[str, Any] = cast(dict[str, Any], item)
+                            val_s2: str = str(item_d.get("value", "") or item_d.get("path", ""))
+                            turn_input_words += len(val_s2.split()) if val_s2 else 0
                 continue
 
             # Text content — add to text run
-            val = part.get("value", "")
-            text = extract_text(val)
+            val2: Any = part_d2.get("value", "")
+            text: str = extract_text(val2)
             if text and text.strip():
                 text_run.append(text)
                 turn_output_words += len(text.split())
@@ -1262,18 +1286,20 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         flush_text_run()
         # Count tool call arguments from toolCallRounds (output words)
         if isinstance(req_meta, dict):
-            for rnd in req_meta.get("toolCallRounds", []):
+            req_meta_d2: dict[str, Any] = cast(dict[str, Any], req_meta)
+            for rnd in cast(list[Any], req_meta_d2.get("toolCallRounds", [])):
                 if not isinstance(rnd, dict):
                     continue
-                for tc in rnd.get("toolCalls", []):
+                rnd_d: dict[str, Any] = cast(dict[str, Any], rnd)
+                for tc in cast(list[Any], rnd_d.get("toolCalls", [])):
                     if isinstance(tc, dict):
-                        args = tc.get("arguments", "")
-                        turn_output_words += len(str(args).split()) if args else 0
+                        args: str = str(cast(dict[str, Any], tc).get("arguments", ""))
+                        turn_output_words += len(args.split()) if args else 0
         total_input_words += turn_input_words
         total_output_words += turn_output_words
 
         # Response end metadata
-        resp_meta_parts = []
+        resp_meta_parts: list[str] = []
         if req_elapsed_ms is not None and req_ts:
             end_dt = datetime.fromtimestamp((req_ts + req_elapsed_ms) / 1000)
             resp_meta_parts.append(end_dt.strftime('%Y-%m-%d %H:%M'))
@@ -1283,14 +1309,14 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
             resp_meta_parts.append(f"{req_elapsed_ms / 1000:.0f}s")
         if c["status"] == "incomplete":
             resp_meta_parts.append("in progress")
-        resp_word_parts = []
+        resp_word_parts: list[str] = []
         if turn_input_words:
             resp_word_parts.append(f"{turn_input_words:,} in")
         if turn_output_words:
             resp_word_parts.append(f"{turn_output_words:,} out")
         if resp_word_parts:
             resp_meta_parts.append("Words: " + " \u00b7 ".join(resp_word_parts))
-        resp_token_parts = []
+        resp_token_parts: list[str] = []
         if req_pt:
             resp_token_parts.append(f"{req_pt:,} ctx")
         if req_rounds > 1:
@@ -1359,9 +1385,11 @@ def main() -> None:
     parser.add_argument("--workspace", "-w", default=".", help="Workspace root directory")
     parser.add_argument("--project-root", default="..", help="Path from output dir to project root, prepended to relative links (default: '..')")
     parser.add_argument("--list", "-l", action="store_true", help="List available sessions")
-    parser.add_argument("--no-wait", action="store_true", help="Skip waiting for JSONL flush (VS Code writes ~every 60s)")
+    parser.add_argument("--wait", action="store_true", default=None, help="Wait for JSONL flush before exporting (default: on if stdin is a TTY)")
     parser.add_argument("--insiders", action="store_true", help="Force using VS Code Insiders data directory")
     args = parser.parse_args()
+    if args.wait is None:
+        args.wait = sys.stdin.isatty()
 
     global _project_root, _workspace_path, _force_insiders
     _project_root = args.project_root
@@ -1379,12 +1407,11 @@ def main() -> None:
         if index:
             entries = index.get("entries", {})
             for sid, info in sorted(entries.items(), key=lambda x: x[1].get("lastMessageDate", 0) if isinstance(x[1], dict) else 0, reverse=True):
-                if not isinstance(info, dict):
-                    continue
-                ts = info.get("lastMessageDate", 0)
+                info_d: dict[str, Any] = cast(dict[str, Any], info)
+                ts: Any = info_d.get("lastMessageDate", 0)
                 dt = datetime.fromtimestamp(ts / 1000).strftime('%Y-%m-%d %H:%M:%S') if ts else "?"
-                title = info.get("title", "Untitled")
-                empty = info.get("isEmpty", True)
+                title: str = str(info_d.get("title", "Untitled"))
+                _empty: Any = info_d.get("isEmpty", True)
                 print(f"  {sid}  {dt}  {title}")
         return
 
@@ -1394,7 +1421,7 @@ def main() -> None:
     # Wait for JSONL flush — VS Code writes chat data every ~60 seconds.
     # Waiting for the next write ensures we capture response parts that
     # have been generated but not yet persisted.
-    if not args.no_wait:
+    if args.wait:
         sys.stdin.close()
         devnull = os.open(os.devnull, os.O_RDONLY)
         os.dup2(devnull, 0)

@@ -38,7 +38,7 @@ Run from within a project directory to export the most recent chat session for t
 | `--workspace, -w DIR` | Workspace root directory (default: current directory) |
 | `--project-root PATH` | Path from output dir to project root, prepended to relative links (default: `..`) |
 | `--list, -l` | List available sessions |
-| `--no-wait` | Skip waiting for JSONL flush (VS Code writes roughly every 60s) |
+| `--wait` | Wait for JSONL flush before exporting (default: on if stdin is a TTY) |
 | `--insiders` | Force using VS Code Insiders data directory |
 
 ### Examples

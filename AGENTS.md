@@ -1,6 +1,6 @@
 This project is a standalone tool to export VS Code Copilot chat sessions from JSONL format into readable markdown files.
 
-The main script is `export_chat_log.py` in the project root.
+The main script is `export-chat-log.py` in the project root.
 
 ## Development
 
@@ -12,6 +12,7 @@ Never git commit unless explicitly asked to do so.
 
 ## Python Style
 
+- Make sure the script will run on Python 3.9.
 - Use strong typing throughout, including for local variables where the type is not obvious from context.
 - Use `from __future__ import annotations` for Python 3.9 compatibility with modern type syntax (`X | None`, `list[str]`, etc.).
 - Use `from typing import Any` when needed.
@@ -20,9 +21,9 @@ Never git commit unless explicitly asked to do so.
 
 ## Chat Log Export
 
-After committing, run `export-chat-log.py </dev/null` to export the current chat session to `agent-logs/`. Do not use any flags. Then amend the commit to include the generated log file:
+After committing, run `export-chat-log.py` to export the current chat session to `agent-logs/`. Do not use any flags. Then amend the commit to include the generated log file:
 ```
-python3 export-chat-log.py </dev/null
+python3 export-chat-log.py
 git add agent-logs/
 git commit --amend --no-edit
 ```
