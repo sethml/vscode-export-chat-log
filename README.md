@@ -1,6 +1,7 @@
 # export-chat-log
 
-A standalone Python script that exports VS Code Copilot chat sessions from their raw JSONL format into clean, readable markdown files.
+A standalone Python script that exports VS Code Copilot chat sessions from their raw
+JSONL format into clean, readable markdown files.
 
 ## Features
 
