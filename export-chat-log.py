@@ -799,7 +799,7 @@ def format_result_details(result_details: dict[str, Any]) -> list[str]:
     return lines
 
 
-def format_tool_call(part: dict[str, Any]) -> list[str]:
+def format_tool_call(part: dict[str, Any], child_parts: list[dict[str, Any]] | None = None) -> list[str]:
     """Format a tool call into readable markdown lines."""
     tool_id = part.get("toolId", "")
     tsd: Any = part.get("toolSpecificData", {})
@@ -909,6 +909,14 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
                 for pline in prompt_text.strip().split("\n"):
                     lines.append(f"> {pline}")
                 lines.append("")
+            # Render child tool calls belonging to this subagent
+            if child_parts:
+                for child in child_parts:
+                    child_lines: list[str] = format_tool_call(child)
+                    if child_lines:
+                        for cl in child_lines:
+                            lines.append(cl)
+                        lines.append("")
             lines.append(sanitize_for_markdown(result_text.strip()))
             lines.append("")
             lines.append("</details>")
@@ -917,6 +925,14 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
                 lines.append(f"{summary_text} ({header_annotation})")
             else:
                 lines.append(summary_text)
+            # Render child tool calls even without result text
+            if child_parts:
+                for child in child_parts:
+                    child_lines = format_tool_call(child)
+                    if child_lines:
+                        for cl in child_lines:
+                            lines.append(cl)
+                        lines.append("")
         return lines
 
     # --- File/text search with list results ---
@@ -1295,6 +1311,20 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
                     out.append("")
                 text_run.clear()
 
+        # Pre-scan: collect tool calls that belong to a subagent
+        subagent_children: dict[str, list[dict[str, Any]]] = {}  # parent tcid -> child parts
+        subagent_child_ids: set[str] = set()  # toolCallIds that are children
+        for _part in cast(list[Any], response):
+            if not isinstance(_part, dict):
+                continue
+            _part_d: dict[str, Any] = cast(dict[str, Any], _part)
+            parent_id: str = str(_part_d.get("subAgentInvocationId", "") or "")
+            if parent_id:
+                subagent_children.setdefault(parent_id, []).append(_part_d)
+                child_tcid: str = str(_part_d.get("toolCallId", "") or "")
+                if child_tcid:
+                    subagent_child_ids.add(child_tcid)
+
         for part in cast(list[Any], response):
             if not isinstance(part, dict):
                 continue
@@ -1327,8 +1357,14 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
             # Tool call — flush text, then render tool
             tool_id: str = str(part_d2.get("toolId", ""))
             if part_kind == "toolInvocationSerialized" or (tool_id and part_kind != ""):
+                # Skip tool calls that belong to a subagent (rendered with parent)
+                part_tcid: str = str(part_d2.get("toolCallId", "") or "")
+                if part_tcid in subagent_child_ids:
+                    continue
                 flush_text_run()
-                tool_lines: list[str] = format_tool_call(part_d2)
+                # For subagent invocations, pass their child tool calls
+                children: list[dict[str, Any]] | None = subagent_children.get(part_tcid)
+                tool_lines: list[str] = format_tool_call(part_d2, children)
                 if tool_lines:
                     for line in tool_lines:
                         out.append(line)
