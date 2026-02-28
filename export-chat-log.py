@@ -8,6 +8,7 @@ Usage:
 
 If no session-id is given, uses the most recently active session for this workspace.
 If no output is given, writes to agent-logs/ with the standard naming convention.
+Use --output - to write markdown to stdout.
 """
 
 from __future__ import annotations
@@ -1128,6 +1129,7 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
     out.append(f"# {escape_html(title)}")
     out.append("")
     out.append(f"- **Date:** {date_range}")
+    out.append(f"- **Session ID:** {escape_html(str(session.get('sessionId', 'unknown')))}")
     out.append(f"- **{model_label}:** {models_str}")
     out.append(f"- **Turns:** {len(visible)}")
     out.append(f"- **Tool calls:** {total_tool_calls}")
@@ -1415,7 +1417,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Export VS Code chat session to markdown")
     parser.add_argument("--session-id", help="Specific session UUID to export")
-    parser.add_argument("--output", "-o", help="Output file path")
+    parser.add_argument("--output", "-o", help="Output file path (use '-' for stdout)")
     parser.add_argument("--workspace", "-w", default=".", help="Workspace root directory")
     parser.add_argument("--project-root", default="..", help="Path from output dir to project root, prepended to relative links (default: '..')")
     parser.add_argument("--list", "-l", action="store_true", help="List available sessions")
@@ -1506,6 +1508,14 @@ def main() -> None:
     source_mtime = os.path.getmtime(session_path)
     markdown = session_to_markdown(session, rolled_back_ids=rolled_back_ids,
                                    source_mtime=source_mtime)
+
+    if args.output == "-":
+        sys.stdout.write(markdown)
+        if not markdown.endswith("\n"):
+            sys.stdout.write("\n")
+        print("  Written to: stdout", file=sys.stderr)
+        print(f"  Size: {len(markdown)} chars, {markdown.count(chr(10))} lines", file=sys.stderr)
+        return
 
     if args.output:
         output_path = args.output
