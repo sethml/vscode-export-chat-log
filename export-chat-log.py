@@ -82,7 +82,7 @@ def find_workspace_storage(workspace_path: str) -> str | None:
 def get_session_index(storage_path: str) -> dict[str, Any] | None:
     """Read the chat session index from the SQLite state DB."""
     db_path = os.path.join(storage_path, "state.vscdb")
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         cursor = conn.execute(
             "SELECT value FROM ItemTable WHERE key = 'chat.ChatSessionStore.index'"
