@@ -72,7 +72,7 @@ def find_workspace_storage(workspace_path: str) -> str | None:
                 try:
                     with open(ws_json) as f:
                         data = json.load(f)
-                    if data.get("folder", "").rstrip("/") == workspace_uri.rstrip("/"):
+                    if unquote(data.get("folder", "")).rstrip("/") == workspace_uri.rstrip("/"):
                         return os.path.join(ws_storage, entry)
                 except (json.JSONDecodeError, IOError):
                     continue
