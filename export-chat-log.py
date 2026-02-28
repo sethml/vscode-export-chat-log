@@ -286,6 +286,18 @@ def stitch_response_windows(windows: list[list[dict[str, Any]]]) -> list[dict[st
             elif fp[0] == "thinking":
                 # Replace with later (more complete) version
                 result[seen[fp]] = part
+            elif kind == "toolInvocationSerialized":
+                # For tool calls (especially subagents), prefer the version
+                # with a populated result over an earlier empty one.
+                tsd: Any = part.get("toolSpecificData")
+                if isinstance(tsd, dict) and cast(dict[str, Any], tsd).get("result"):
+                    old_tsd: Any = result[seen[fp]].get("toolSpecificData")
+                    old_has_result: bool = bool(
+                        isinstance(old_tsd, dict)
+                        and cast(dict[str, Any], old_tsd).get("result")
+                    )
+                    if not old_has_result:
+                        result[seen[fp]] = part
     return result
 
 
@@ -869,17 +881,42 @@ def format_tool_call(part: dict[str, Any]) -> list[str]:
 
     # --- runSubagent: result text in toolSpecificData ---
     if tool_id == "runSubagent":
-        result_text: str = str(cast(dict[str, Any], tsd).get("result", "")) if isinstance(tsd, dict) else ""
-        summary_text = msg or "Run subagent"
+        tsd_d = cast(dict[str, Any], tsd) if isinstance(tsd, dict) else {}
+        result_text: str = str(tsd_d.get("result", "") or "")
+        agent_name: str = str(tsd_d.get("agentName", "") or "")
+        model_name: str = str(tsd_d.get("modelName", "") or "")
+        prompt_text: str = str(tsd_d.get("prompt", "") or "")
+        description: str = str(tsd_d.get("description", "") or "")
+        summary_text = msg or description or "Run subagent"
+
+        # Build a header annotation
+        header_parts: list[str] = []
+        if agent_name:
+            header_parts.append(f"{agent_name} agent")
+        if model_name:
+            header_parts.append(model_name)
+        header_annotation: str = " · ".join(header_parts)
+
         if result_text:
             lines.append("<details>")
-            lines.append(f"<summary>{md_to_summary_html(summary_text)}</summary>")
+            detail_label: str = summary_text
+            if header_annotation:
+                detail_label = f"{summary_text} ({header_annotation})"
+            lines.append(f"<summary>{md_to_summary_html(detail_label)}</summary>")
             lines.append("")
-            lines.append(result_text.strip())
+            if prompt_text:
+                lines.append("**Prompt:**")
+                for pline in prompt_text.strip().split("\n"):
+                    lines.append(f"> {pline}")
+                lines.append("")
+            lines.append(sanitize_for_markdown(result_text.strip()))
             lines.append("")
             lines.append("</details>")
         else:
-            lines.append(summary_text)
+            if header_annotation:
+                lines.append(f"{summary_text} ({header_annotation})")
+            else:
+                lines.append(summary_text)
         return lines
 
     # --- File/text search with list results ---
