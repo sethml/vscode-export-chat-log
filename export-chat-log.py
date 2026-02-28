@@ -153,8 +153,15 @@ def find_rolled_back_request_ids(storage_path: str, session_id: str, all_request
 
     return rolled_back
 
-def find_active_session(storage_path: str, session_id: str | None = None) -> str:
-    """Find the session JSONL file path."""
+def find_active_session(storage_path: str, session_id: str | None = None,
+                        prefer_recent: bool = False) -> str:
+    """Find the session JSONL file path.
+
+    When *prefer_recent* is True (used during --wait mode), prefer the most
+    recently **created** session even if the DB still marks it as isEmpty.
+    This avoids a race where VS Code hasn't flushed the index yet for a brand-new
+    session and the script would otherwise pick an older session.
+    """
     sessions_dir = os.path.join(storage_path, "chatSessions")
 
     if session_id:
@@ -164,6 +171,10 @@ def find_active_session(storage_path: str, session_id: str | None = None) -> str
         raise FileNotFoundError(f"Session {session_id} not found")
 
     index = get_session_index(storage_path)
+    best_nonempty: str | None = None
+    newest_created_path: str | None = None
+    newest_created_ts: float = 0
+
     if index:
         entries = index.get("entries", {})
         for sid, info in sorted(
@@ -172,8 +183,29 @@ def find_active_session(storage_path: str, session_id: str | None = None) -> str
             reverse=True,
         ):
             path = os.path.join(sessions_dir, f"{sid}.jsonl")
-            if os.path.isfile(path) and not info.get("isEmpty", True):
-                return path
+            if not os.path.isfile(path):
+                continue
+            if best_nonempty is None and not info.get("isEmpty", True):
+                best_nonempty = path
+            # Track the most recently created session regardless of isEmpty
+            timing = info.get("timing", {})
+            created: float = timing.get("created", 0)
+            if created > newest_created_ts:
+                newest_created_ts = created
+                newest_created_path = path
+
+    if prefer_recent and newest_created_path is not None and best_nonempty is not None:
+        # If a session was created more recently than the best non-empty
+        # session's last message, prefer it — it's likely the active session
+        # whose isEmpty flag hasn't been flushed yet.
+        if index:
+            best_sid = os.path.splitext(os.path.basename(best_nonempty))[0]
+            best_last_msg: float = index.get("entries", {}).get(best_sid, {}).get("lastMessageDate", 0)
+            if newest_created_ts > best_last_msg:
+                return newest_created_path
+
+    if best_nonempty is not None:
+        return best_nonempty
 
     # Fallback: most recently modified JSONL
     jsonl_files = sorted(
@@ -1423,12 +1455,15 @@ def main() -> None:
                 print(f"  {sid}  {dt}  {title}")
         return
 
-    session_path = find_active_session(storage_path, args.session_id)
+    session_path = find_active_session(storage_path, args.session_id,
+                                        prefer_recent=bool(args.wait))
     print(f"Extracting session from: {os.path.basename(session_path)}", file=sys.stderr)
 
     # Wait for JSONL flush — VS Code writes chat data every ~60 seconds.
     # Waiting for the next write ensures we capture response parts that
-    # have been generated but not yet persisted.
+    # have been generated but not yet persisted.  Also handles the case
+    # where a brand-new session's JSONL has only the initial snapshot (1
+    # line) and we need to wait for actual content to appear.
     if args.wait:
         sys.stdin.close()
         devnull = os.open(os.devnull, os.O_RDONLY)
