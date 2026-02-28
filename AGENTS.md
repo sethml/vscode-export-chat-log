@@ -25,13 +25,11 @@ Before committing, check for Pylance errors and warnings by using the `get_error
 
 ## Chat Log Export
 
-After committing, export the current chat session to `agent-logs/`. Do this as the
-last communication with the user, so the log contains all important context. Use this
+After committing, export the current chat session to `agent-logs/`. Use this
 command exactly:
 `python3 export-chat-log.py </dev/null && git add agent-logs/ && git commit --amend --no-edit`
 
-Do not add any commentary before or after running this command. No "Done.", no
-"Exporting the chat log:", nothing. Run the command and stop.
+Do not add any commentary after running this command - if you want to output a summary, do it before the command. After the command: No "Done.", no summary, nothing. Run the command and stop.
 
 ## File Editing
 

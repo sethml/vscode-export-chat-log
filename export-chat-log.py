@@ -1393,8 +1393,6 @@ def main() -> None:
     args = parser.parse_args()
     if args.wait is None:
         args.wait = not sys.stdin.isatty()
-        if args.wait:
-            print("Input is not a TTY, enabling --wait to capture in-progress responses", file=sys.stderr)
 
     global _project_root, _workspace_path, _force_insiders
     _project_root = args.project_root
