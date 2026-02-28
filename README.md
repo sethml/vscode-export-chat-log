@@ -66,3 +66,5 @@ The script locates VS Code's internal storage for the current workspace:
 2. Matches the current workspace to a `workspaceStorage` entry via `workspace.json`
 3. Reads the SQLite state database to find the session index
 4. Parses the session's JSONL file and renders it as markdown
+
+This is the way
