@@ -756,13 +756,6 @@ def format_hashline_output(result_details: dict[str, Any]) -> list[str]:
     return result
 
 
-def _strip_hashline_prefixes(raw: str) -> str:
-    """Strip line:hash| prefixes from hashline-formatted content."""
-    content_lines: list[str] = []
-    for line in raw.split("\n"):
-        m = re.match(r'^\d+:[a-z]+\|(.*)$', line)
-        content_lines.append(m.group(1) if m else line)
-    return "\n".join(content_lines)
 
 
 _CONTENT_TXT_RE = re.compile(
@@ -770,9 +763,9 @@ _CONTENT_TXT_RE = re.compile(
 )
 
 
-def _extract_content_txt_info(part: dict[str, Any]) -> str | None:
+def _extract_content_txt_info(part: dict[str, Any]) -> tuple[str, int | None, int | None] | None:
     """If this copilot_readFile reads a content.txt from chat-session-resources,
-    return the filesystem path to the content.txt.  Otherwise return None."""
+    return (filesystem_path, start_line, end_line).  Lines are 1-based; None if unknown."""
     ptm: Any = part.get("pastTenseMessage", "")
     inv: Any = part.get("invocationMessage", "")
     for msg_obj in (ptm, inv):
@@ -786,7 +779,10 @@ def _extract_content_txt_info(part: dict[str, Any]) -> str | None:
             if '#' in raw_path:
                 raw_path = raw_path.rsplit('#', 1)[0]
             if _CONTENT_TXT_RE.search(raw_path):
-                return raw_path
+                rm = re.search(r'lines (\d+) to (\d+)', val)
+                start_ln: int | None = int(rm.group(1)) if rm else None
+                end_ln: int | None = int(rm.group(2)) if rm else None
+                return raw_path, start_ln, end_ln
     return None
 
 
@@ -824,10 +820,17 @@ def _build_tool_call_map(req_meta: Any) -> dict[str, dict[str, str]]:
     return result
 
 
-def format_content_txt_read(content_txt_path: str, tool_call_map: dict[str, dict[str, str]]) -> list[str] | None:
+def format_content_txt_read(
+    content_txt_path: str,
+    tool_call_map: dict[str, dict[str, str]],
+    start_line: int | None = None,
+    end_line: int | None = None,
+) -> list[str] | None:
     """Read a content.txt file from disk and format as a details block.
 
     Returns formatted markdown lines, or None if the file can't be read.
+    Hashline prefixes (e.g. "1:ab|") are preserved so the output reflects
+    what the tool actually returned.
     """
     if not os.path.isfile(content_txt_path):
         return None
@@ -846,11 +849,21 @@ def format_content_txt_read(content_txt_path: str, tool_call_map: dict[str, dict
     original_name: str = original_info.get("name", "")
     original_file: str = original_info.get("filePath", "")
 
-    # Detect if content is hashline format
+    # Detect hashline format and slice to the requested line range.
+    # Hashline prefixes are kept intact so the output reflects what the tool returned.
     is_hashline: bool = bool(re.match(r'^\d+:[a-z]+\|', raw))
 
-    if is_hashline:
-        content: str = _strip_hashline_prefixes(raw)
+    if is_hashline and start_line is not None and end_line is not None:
+        sl: int = start_line
+        el: int = end_line
+        filtered: list[str] = [
+            ln for ln in raw.split("\n")
+            if (hl := re.match(r'^(\d+):[a-z]+\|', ln)) and sl <= int(hl.group(1)) <= el
+        ]
+        content: str = "\n".join(filtered)
+    elif not is_hashline and start_line is not None and end_line is not None:
+        all_lines: list[str] = raw.split("\n")
+        content = "\n".join(all_lines[start_line - 1:end_line])
     else:
         content = raw
 
@@ -858,16 +871,24 @@ def format_content_txt_read(content_txt_path: str, tool_call_map: dict[str, dict
         return None
 
     # Build summary
-    if original_name == "hashline_read" and original_file:
+    if original_file:
         short_file: str = shorten_path(original_file)
-        summary: str = f"Reading all lines of [{os.path.basename(short_file)}]({make_link_path(short_file)})"
-    elif original_file:
-        short_file = shorten_path(original_file)
-        summary = f"Reading [{os.path.basename(short_file)}]({make_link_path(short_file)})"
+        fname: str = os.path.basename(short_file)
+        flink: str = make_link_path(short_file)
+        if start_line is not None and end_line is not None:
+            summary: str = f"Reading lines {start_line}-{end_line} of [{fname}]({flink})"
+        else:
+            summary = f"Reading all lines of [{fname}]({flink})"
     elif original_name:
-        summary = f"Tool output ({original_name})"
+        if start_line is not None and end_line is not None:
+            summary = f"Tool output ({original_name}), lines {start_line}-{end_line}"
+        else:
+            summary = f"Tool output ({original_name})"
     else:
-        summary = "File content (continued)"
+        if start_line is not None and end_line is not None:
+            summary = f"File content, lines {start_line}-{end_line}"
+        else:
+            summary = "File content (continued)"
 
     truncated: bool = len(content) > 4000
     display: str = content[:4000]
@@ -1498,9 +1519,10 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
 
                 # Handle copilot_readFile for content.txt (large tool result continuation)
                 if tool_id == "copilot_readFile":
-                    ct_path: str | None = _extract_content_txt_info(part_d2)
-                    if ct_path:
-                        ct_lines: list[str] | None = format_content_txt_read(ct_path, tcr_map)
+                    ct_info: tuple[str, int | None, int | None] | None = _extract_content_txt_info(part_d2)
+                    if ct_info is not None:
+                        ct_fpath, ct_start, ct_end = ct_info
+                        ct_lines: list[str] | None = format_content_txt_read(ct_fpath, tcr_map, ct_start, ct_end)
                         if ct_lines:
                             for line in ct_lines:
                                 out.append(line)
