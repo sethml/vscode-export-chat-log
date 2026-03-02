@@ -756,6 +756,136 @@ def format_hashline_output(result_details: dict[str, Any]) -> list[str]:
     return result
 
 
+def _strip_hashline_prefixes(raw: str) -> str:
+    """Strip line:hash| prefixes from hashline-formatted content."""
+    content_lines: list[str] = []
+    for line in raw.split("\n"):
+        m = re.match(r'^\d+:[a-z]+\|(.*)$', line)
+        content_lines.append(m.group(1) if m else line)
+    return "\n".join(content_lines)
+
+
+_CONTENT_TXT_RE = re.compile(
+    r'chat-session-resources/[^/]+/([^/]+)/content\.txt'
+)
+
+
+def _extract_content_txt_info(part: dict[str, Any]) -> str | None:
+    """If this copilot_readFile reads a content.txt from chat-session-resources,
+    return the filesystem path to the content.txt.  Otherwise return None."""
+    ptm: Any = part.get("pastTenseMessage", "")
+    inv: Any = part.get("invocationMessage", "")
+    for msg_obj in (ptm, inv):
+        if not isinstance(msg_obj, dict):
+            continue
+        val: str = str(cast(dict[str, Any], msg_obj).get("value", ""))
+        m = re.search(r'\(file:///([^)]+content\.txt[^)]*)\)', val)
+        if m:
+            raw_path: str = "/" + unquote(m.group(1))
+            # Strip fragment (e.g. #1-1)
+            if '#' in raw_path:
+                raw_path = raw_path.rsplit('#', 1)[0]
+            if _CONTENT_TXT_RE.search(raw_path):
+                return raw_path
+    return None
+
+
+def _build_tool_call_map(req_meta: Any) -> dict[str, dict[str, str]]:
+    """Build a map from tool_call_id -> {name, filePath} from toolCallRounds."""
+    result: dict[str, dict[str, str]] = {}
+    if not isinstance(req_meta, dict):
+        return result
+    rounds: list[Any] = cast(dict[str, Any], req_meta).get("toolCallRounds", [])
+    if not isinstance(rounds, list):
+        return result
+    for rnd in rounds:
+        if not isinstance(rnd, dict):
+            continue
+        for tc in cast(list[Any], cast(dict[str, Any], rnd).get("toolCalls", [])):
+            if not isinstance(tc, dict):
+                continue
+            tc_d: dict[str, Any] = cast(dict[str, Any], tc)
+            tc_id: str = str(tc_d.get("id", ""))
+            tc_name: str = str(tc_d.get("name", ""))
+            tc_args_raw: Any = tc_d.get("arguments", "")
+            tc_args: dict[str, Any] = {}
+            if isinstance(tc_args_raw, str):
+                try:
+                    parsed = json.loads(tc_args_raw)
+                    if isinstance(parsed, dict):
+                        tc_args = cast(dict[str, Any], parsed)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif isinstance(tc_args_raw, dict):
+                tc_args = cast(dict[str, Any], tc_args_raw)
+            fp: str = str(tc_args.get("filePath", ""))
+            if tc_id:
+                result[tc_id] = {"name": tc_name, "filePath": fp}
+    return result
+
+
+def format_content_txt_read(content_txt_path: str, tool_call_map: dict[str, dict[str, str]]) -> list[str] | None:
+    """Read a content.txt file from disk and format as a details block.
+
+    Returns formatted markdown lines, or None if the file can't be read.
+    """
+    if not os.path.isfile(content_txt_path):
+        return None
+    try:
+        with open(content_txt_path) as f:
+            raw: str = f.read()
+    except (IOError, OSError):
+        return None
+    if not raw.strip():
+        return None
+
+    # Extract the original tool call ID from the path
+    m = _CONTENT_TXT_RE.search(content_txt_path)
+    original_tool_id: str = m.group(1) if m else ""
+    original_info: dict[str, str] = tool_call_map.get(original_tool_id, {})
+    original_name: str = original_info.get("name", "")
+    original_file: str = original_info.get("filePath", "")
+
+    # Detect if content is hashline format
+    is_hashline: bool = bool(re.match(r'^\d+:[a-z]+\|', raw))
+
+    if is_hashline:
+        content: str = _strip_hashline_prefixes(raw)
+    else:
+        content = raw
+
+    if not content.strip():
+        return None
+
+    # Build summary
+    if original_name == "hashline_read" and original_file:
+        short_file: str = shorten_path(original_file)
+        summary: str = f"Reading all lines of [{os.path.basename(short_file)}]({make_link_path(short_file)})"
+    elif original_file:
+        short_file = shorten_path(original_file)
+        summary = f"Reading [{os.path.basename(short_file)}]({make_link_path(short_file)})"
+    elif original_name:
+        summary = f"Tool output ({original_name})"
+    else:
+        summary = "File content (continued)"
+
+    truncated: bool = len(content) > 4000
+    display: str = content[:4000]
+    _fence: str = fence_for(display)
+
+    lines: list[str] = []
+    lines.append("<details>")
+    lines.append(f"<summary>{md_to_summary_html(summary)}</summary>")
+    lines.append("")
+    lines.append(_fence)
+    lines.append(display)
+    if truncated:
+        lines.append(f"... (truncated, {len(content)} chars)")
+    lines.append(_fence)
+    lines.append("</details>")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Tool call formatting
 # ---------------------------------------------------------------------------
@@ -1311,6 +1441,9 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
                     out.append("")
                 text_run.clear()
 
+        # Pre-scan: build tool-call map from toolCallRounds for content.txt resolution
+        tcr_map: dict[str, dict[str, str]] = _build_tool_call_map(req_meta)
+
         # Pre-scan: collect tool calls that belong to a subagent
         subagent_children: dict[str, list[dict[str, Any]]] = {}  # parent tcid -> child parts
         subagent_child_ids: set[str] = set()  # toolCallIds that are children
@@ -1362,6 +1495,18 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
                 if part_tcid in subagent_child_ids:
                     continue
                 flush_text_run()
+
+                # Handle copilot_readFile for content.txt (large tool result continuation)
+                if tool_id == "copilot_readFile":
+                    ct_path: str | None = _extract_content_txt_info(part_d2)
+                    if ct_path:
+                        ct_lines: list[str] | None = format_content_txt_read(ct_path, tcr_map)
+                        if ct_lines:
+                            for line in ct_lines:
+                                out.append(line)
+                            out.append("")
+                        continue
+
                 # For subagent invocations, pass their child tool calls
                 children: list[dict[str, Any]] | None = subagent_children.get(part_tcid)
                 tool_lines: list[str] = format_tool_call(part_d2, children)
