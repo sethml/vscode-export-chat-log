@@ -1265,6 +1265,8 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         rolled_back_ids = set()
 
     title = session.get("customTitle", "Untitled Session")
+    is_forked: bool = title.startswith("Forked: ")
+    fork_parent_title: str = title[len("Forked: "):] if is_forked else ""
     dt = get_session_creation_time(session)
     session_model_id = (
         session.get("inputState", {})
@@ -1393,18 +1395,23 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
 
     # --- Turns ---
     rollback_count = 0
+    seen_visible = False
     for c in active:
         if c["is_rolled_back"]:
             rollback_count += 1
             continue
-        # Emit rollback marker if we just passed a sequence of rolled-back turns
+        # Emit rollback/fork marker if we just passed a sequence of rolled-back turns
         if rollback_count > 0:
-            s = "s" if rollback_count > 1 else ""
-            out.append(f"**{rollback_count} user prompt{s} rolled back**")
+            if is_forked and not seen_visible:
+                out.append(f"**Forked from [{escape_html(fork_parent_title)}]**")
+            else:
+                s = "s" if rollback_count > 1 else ""
+                out.append(f"**{rollback_count} user prompt{s} rolled back**")
             out.append("")
             out.append("---")
             out.append("")
             rollback_count = 0
+        seen_visible = True
 
         req = c["req"]
         turn_idx = c["turn_num"]
@@ -1619,8 +1626,11 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         out.append("")
     # Trailing rollback marker if session ends with rolled-back turns
     if rollback_count > 0:
-        s = "s" if rollback_count > 1 else ""
-        out.append(f"**{rollback_count} user prompt{s} rolled back**")
+        if is_forked and not seen_visible:
+            out.append(f"**Forked from [{escape_html(fork_parent_title)}]**")
+        else:
+            s = "s" if rollback_count > 1 else ""
+            out.append(f"**{rollback_count} user prompt{s} rolled back**")
         out.append("")
         out.append("---")
         out.append("")
