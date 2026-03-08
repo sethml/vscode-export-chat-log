@@ -94,6 +94,21 @@ def get_session_index(storage_path: str) -> dict[str, Any] | None:
         conn.close()
 
 
+def find_parent_session_id(storage_path: str, parent_title: str) -> str | None:
+    """Find the session ID of the parent of a forked session by matching title."""
+    index = get_session_index(storage_path)
+    if not isinstance(index, dict):
+        return None
+    entries: Any = index.get("entries", {})
+    if not isinstance(entries, dict):
+        return None
+    for sid, entry in cast(dict[str, Any], entries).items():
+        if isinstance(entry, dict) and cast(dict[str, Any], entry).get("title") == parent_title:
+            return sid
+    return None
+
+
+
 def find_rolled_back_request_ids(storage_path: str, session_id: str, all_request_ids: set[str] | None = None) -> set[str]:
     """Detect rolled-back requests using chatEditingSessions timeline.
 
@@ -334,6 +349,8 @@ def replay_jsonl(filepath: str) -> dict[str, Any]:
                     session_state = cast(dict[str, Any], v)
                 else:
                     session_state = {}
+                # Capture original title before any kind:1 edits can change it
+                session_state["_initial_title"] = session_state.get("customTitle", "")
                 for req in session_state.get("requests", []):
                     rid: str = req.get("requestId", "")
                     if rid and rid not in requests_by_id:
@@ -1259,7 +1276,7 @@ def _get_prompt_text(req: dict[str, Any]) -> str:
         return msg.strip()
     return ""
 
-def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | None = None, source_mtime: float | None = None) -> str:
+def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | None = None, source_mtime: float | None = None, parent_session_id: str | None = None) -> str:
     """Convert a replayed session state to a rich markdown document.
 
     source_mtime: mtime of the JSONL file (epoch seconds), used to estimate
@@ -1411,7 +1428,10 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         if rollback_count > 0:
             # All rolled-back requests came from initial snapshot = forked conversation
             if rollback_rids and all(rid in forked_rids for rid in rollback_rids if rid):
-                out.append("**Forked conversation**")
+                fork_marker = "**Forked conversation**"
+                if parent_session_id:
+                    fork_marker += f" (from `{parent_session_id}`)"
+                out.append(fork_marker)
             else:
                 s = "s" if rollback_count > 1 else ""
                 out.append(f"**{rollback_count} user prompt{s} rolled back**")
@@ -1635,7 +1655,10 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
     # Trailing rollback marker if session ends with rolled-back turns
     if rollback_count > 0:
         if rollback_rids and all(rid in forked_rids for rid in rollback_rids if rid):
-            out.append("**Forked conversation**")
+            fork_marker = "**Forked conversation**"
+            if parent_session_id:
+                fork_marker += f" (from `{parent_session_id}`)"
+            out.append(fork_marker)
         else:
             s = "s" if rollback_count > 1 else ""
             out.append(f"**{rollback_count} user prompt{s} rolled back**")
@@ -1776,8 +1799,17 @@ def main() -> None:
     print(f"  Stitched parts: {total_parts}", file=sys.stderr)
 
     source_mtime = os.path.getmtime(session_path)
+
+    # Find parent session ID if this is a fork
+    parent_session_id: str | None = None
+    initial_title: str = session.get("_initial_title", "")
+    if initial_title.startswith("Forked: ") and storage_path:
+        parent_title = initial_title[len("Forked: "):]
+        parent_session_id = find_parent_session_id(storage_path, parent_title)
+
     markdown = session_to_markdown(session, rolled_back_ids=rolled_back_ids,
-                                   source_mtime=source_mtime)
+                                   source_mtime=source_mtime,
+                                   parent_session_id=parent_session_id)
 
     if args.output == "-":
         sys.stdout.write(markdown)
