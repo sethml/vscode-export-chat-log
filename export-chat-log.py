@@ -310,6 +310,9 @@ def replay_jsonl(filepath: str) -> dict[str, Any]:
     # Track sequence numbers for interjection detection
     seq = 0
     request_submit_seq: dict[str, int] = {}   # rid -> seq when request was submitted
+    # Track which request IDs came from the initial kind:0 snapshot
+    # (used to detect forked sessions — forks embed parent requests in the snapshot)
+    initial_snapshot_rids: set[str] = set()
     # Track result/modelState/followups writes with their seq and origin index
     result_writes: list[tuple[int, int, dict[str, Any]]] = []        # list of (seq, idx, value)
     model_state_writes: list[tuple[int, int, Any]] = []   # list of (seq, idx, value)
@@ -337,6 +340,7 @@ def replay_jsonl(filepath: str) -> dict[str, Any]:
                         requests_by_id[rid] = req
                         request_order.append(rid)
                         request_submit_seq[rid] = seq
+                        initial_snapshot_rids.add(rid)
                         resp_val: Any = req.get("response", [])
                         if resp_val:
                             response_windows.setdefault(rid, []).append((seq, resp_val))
@@ -397,6 +401,7 @@ def replay_jsonl(filepath: str) -> dict[str, Any]:
         response_windows, result_writes, model_state_writes, followups_writes)
 
     session_state["requests"] = [requests_by_id[rid] for rid in request_order]
+    session_state["_initial_snapshot_rids"] = initial_snapshot_rids
     return session_state
 
 
@@ -1265,8 +1270,9 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         rolled_back_ids = set()
 
     title = session.get("customTitle", "Untitled Session")
-    is_forked: bool = title.startswith("Forked: ")
-    fork_parent_title: str = title[len("Forked: "):] if is_forked else ""
+    # Detect forked sessions: initial snapshot contains requests that were rolled back
+    initial_snapshot_rids: set[str] = session.get("_initial_snapshot_rids", set())
+    forked_rids: set[str] = initial_snapshot_rids & rolled_back_ids
     dt = get_session_creation_time(session)
     session_model_id = (
         session.get("inputState", {})
@@ -1395,15 +1401,17 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
 
     # --- Turns ---
     rollback_count = 0
-    seen_visible = False
+    rollback_rids: list[str] = []
     for c in active:
         if c["is_rolled_back"]:
             rollback_count += 1
+            rollback_rids.append(c["req"].get("requestId", ""))
             continue
         # Emit rollback/fork marker if we just passed a sequence of rolled-back turns
         if rollback_count > 0:
-            if is_forked and not seen_visible:
-                out.append(f"**Forked from [{escape_html(fork_parent_title)}]**")
+            # All rolled-back requests came from initial snapshot = forked conversation
+            if rollback_rids and all(rid in forked_rids for rid in rollback_rids if rid):
+                out.append("**Forked conversation**")
             else:
                 s = "s" if rollback_count > 1 else ""
                 out.append(f"**{rollback_count} user prompt{s} rolled back**")
@@ -1411,7 +1419,7 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
             out.append("---")
             out.append("")
             rollback_count = 0
-        seen_visible = True
+            rollback_rids = []
 
         req = c["req"]
         turn_idx = c["turn_num"]
@@ -1626,8 +1634,8 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
         out.append("")
     # Trailing rollback marker if session ends with rolled-back turns
     if rollback_count > 0:
-        if is_forked and not seen_visible:
-            out.append(f"**Forked from [{escape_html(fork_parent_title)}]**")
+        if rollback_rids and all(rid in forked_rids for rid in rollback_rids if rid):
+            out.append("**Forked conversation**")
         else:
             s = "s" if rollback_count > 1 else ""
             out.append(f"**{rollback_count} user prompt{s} rolled back**")
