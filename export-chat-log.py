@@ -666,6 +666,19 @@ def escape_html(text: str) -> str:
     return html.escape(text)
 
 
+def format_elapsed(ms: int) -> str:
+    """Format elapsed milliseconds as 3h12m34s, 5m22s, or 23s."""
+    total_s = round(ms / 1000)
+    hours = total_s // 3600
+    minutes = (total_s % 3600) // 60
+    seconds = total_s % 60
+    if hours:
+        return f"{hours}h{minutes:02d}m{seconds:02d}s"
+    elif minutes:
+        return f"{minutes}m{seconds:02d}s"
+    else:
+        return f"{seconds}s"
+
 def escape_link_text(text: str) -> str:
     """Escape text for use inside a markdown link display: escape HTML and bracket chars."""
     s = html.escape(text)
@@ -792,8 +805,6 @@ def _build_tool_call_map(req_meta: Any) -> dict[str, dict[str, str]]:
     if not isinstance(req_meta, dict):
         return result
     rounds: list[Any] = cast(dict[str, Any], req_meta).get("toolCallRounds", [])
-    if not isinstance(rounds, list):
-        return result
     for rnd in rounds:
         if not isinstance(rnd, dict):
             continue
@@ -1347,7 +1358,7 @@ def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | Non
     if total_rounds:
         out.append(f"- **API rounds:** {total_rounds:,}")
     if total_elapsed_ms:
-        out.append(f"- **Total elapsed:** {total_elapsed_ms / 1000:.0f}s")
+        out.append(f"- **Total elapsed:** {format_elapsed(total_elapsed_ms)}")
     out.append("")
 
     # --- Table of Contents ---
@@ -1665,8 +1676,6 @@ def main() -> None:
     parser.add_argument("--insiders", action="store_true", help="Force using VS Code Insiders data directory")
     parser.add_argument("--no-insiders", action="store_true", help="Do not use VS Code Insiders data directory (overrides TERM_PROGRAM_VERSION detection)")
     args = parser.parse_args()
-    if args.wait is None:
-        args.wait = not sys.stdin.isatty()
 
     global _project_root, _workspace_path, _force_insiders
     _project_root = args.project_root
@@ -1696,6 +1705,9 @@ def main() -> None:
                 _empty: Any = info_d.get("isEmpty", True)
                 print(f"  {sid}  {dt}  {title}")
         return
+    
+    if args.wait:
+        time.sleep(5)  # allow time for in-progress chat to complete
 
     session_path = find_active_session(storage_path, args.session_id,
                                         prefer_recent=bool(args.wait))
