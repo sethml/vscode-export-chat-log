@@ -12,6 +12,7 @@ Use --output - to write markdown to stdout.
 """
 
 from __future__ import annotations
+import glob
 
 
 import hashlib
@@ -60,9 +61,22 @@ def _vscode_data_dirs() -> list[str]:
     return dirs
 
 
-def find_workspace_storage(workspace_path: str) -> str | None:
-    """Find the VS Code workspace storage dir for the given workspace."""
-    workspace_uri = "file://" + os.path.abspath(workspace_path)
+def find_workspace_storage(workspace_path: str) -> list[str]:
+    """Find VS Code workspace storage dirs for the given workspace.
+
+    Returns all matching storage directories.  A directory can match via the
+    ``folder`` key (regular folder workspace) or via the ``workspace`` key
+    (multi-root ``.code-workspace`` file located inside *workspace_path*).
+    """
+    abs_path: str = os.path.abspath(workspace_path)
+    folder_uri: str = "file://" + abs_path
+
+    # Collect .code-workspace URIs for files in the directory
+    workspace_file_uris: set[str] = set()
+    for name in glob.glob(os.path.join(abs_path, "*.code-workspace")):
+        workspace_file_uris.add("file://" + name)
+
+    results: list[str] = []
     for data_dir in _vscode_data_dirs():
         ws_storage = os.path.join(data_dir, "User", "workspaceStorage")
         if not os.path.isdir(ws_storage):
@@ -73,11 +87,15 @@ def find_workspace_storage(workspace_path: str) -> str | None:
                 try:
                     with open(ws_json) as f:
                         data = json.load(f)
-                    if unquote(data.get("folder", "")).rstrip("/") == workspace_uri.rstrip("/"):
-                        return os.path.join(ws_storage, entry)
+                    stored_folder: str = unquote(data.get("folder", "")).rstrip("/")
+                    stored_workspace: str = unquote(data.get("workspace", "")).rstrip("/")
+                    if stored_folder and stored_folder == folder_uri.rstrip("/"):
+                        results.append(os.path.join(ws_storage, entry))
+                    elif stored_workspace and stored_workspace in workspace_file_uris:
+                        results.append(os.path.join(ws_storage, entry))
                 except (json.JSONDecodeError, IOError):
                     continue
-    return None
+    return results
 
 
 def get_session_index(storage_path: str) -> dict[str, Any] | None:
@@ -1729,29 +1747,61 @@ def main() -> None:
         _force_insiders = "insider" in os.environ.get("TERM_PROGRAM_VERSION", "").lower()
 
     workspace = os.path.abspath(args.workspace)
-    storage_path = find_workspace_storage(workspace)
-    if not storage_path:
+    storage_paths: list[str] = find_workspace_storage(workspace)
+    if not storage_paths:
         print(f"Error: Could not find VS Code workspace storage for {workspace}", file=sys.stderr)
         sys.exit(1)
 
     if args.list:
-        index = get_session_index(storage_path)
-        if index:
-            entries = index.get("entries", {})
-            for sid, info in sorted(entries.items(), key=lambda x: x[1].get("lastMessageDate", 0) if isinstance(x[1], dict) else 0, reverse=True):
-                info_d: dict[str, Any] = cast(dict[str, Any], info)
-                ts: Any = info_d.get("lastMessageDate", 0)
-                dt = datetime.fromtimestamp(ts / 1000).strftime('%Y-%m-%d %H:%M:%S') if ts else "?"
-                title: str = str(info_d.get("title", "Untitled"))
-                _empty: Any = info_d.get("isEmpty", True)
-                print(f"  {sid}  {dt}  {title}")
+        all_entries: list[tuple[str, dict[str, Any]]] = []
+        for sp in storage_paths:
+            index = get_session_index(sp)
+            if index:
+                entries = index.get("entries", {})
+                for sid, info in entries.items():
+                    if isinstance(info, dict):
+                        all_entries.append((sid, cast(dict[str, Any], info)))
+        for sid, info_d in sorted(all_entries, key=lambda x: x[1].get("lastMessageDate", 0), reverse=True):
+            ts: Any = info_d.get("lastMessageDate", 0)
+            dt = datetime.fromtimestamp(ts / 1000).strftime('%Y-%m-%d %H:%M:%S') if ts else "?"
+            title: str = str(info_d.get("title", "Untitled"))
+            _empty: Any = info_d.get("isEmpty", True)
+            print(f"  {sid}  {dt}  {title}")
         return
     
     if args.wait:
         time.sleep(5)  # allow time for in-progress chat to complete
 
-    session_path = find_active_session(storage_path, args.session_id,
-                                        prefer_recent=bool(args.wait))
+    # Find the active session across all storage paths
+    session_path: str | None = None
+    storage_path: str = storage_paths[0]
+    if args.session_id:
+        for sp in storage_paths:
+            try:
+                session_path = find_active_session(sp, args.session_id)
+                storage_path = sp
+                break
+            except FileNotFoundError:
+                continue
+        if session_path is None:
+            raise FileNotFoundError(f"Session {args.session_id} not found")
+    else:
+        best_path: str | None = None
+        best_mtime: float = 0
+        for sp in storage_paths:
+            try:
+                candidate = find_active_session(sp, prefer_recent=bool(args.wait))
+                mtime = os.path.getmtime(candidate)
+                if mtime > best_mtime:
+                    best_mtime = mtime
+                    best_path = candidate
+                    storage_path = sp
+            except FileNotFoundError:
+                continue
+        if best_path is None:
+            raise FileNotFoundError("No chat sessions found")
+        session_path = best_path
+
     print(f"Extracting session from: {os.path.basename(session_path)}", file=sys.stderr)
 
     # Wait for JSONL flush — VS Code writes chat data every ~60 seconds.
@@ -1803,9 +1853,12 @@ def main() -> None:
     # Find parent session ID if this is a fork
     parent_session_id: str | None = None
     initial_title: str = session.get("_initial_title", "")
-    if initial_title.startswith("Forked: ") and storage_path:
+    if initial_title.startswith("Forked: "):
         parent_title = initial_title[len("Forked: "):]
-        parent_session_id = find_parent_session_id(storage_path, parent_title)
+        for sp in storage_paths:
+            parent_session_id = find_parent_session_id(sp, parent_title)
+            if parent_session_id:
+                break
 
     markdown = session_to_markdown(session, rolled_back_ids=rolled_back_ids,
                                    source_mtime=source_mtime,
