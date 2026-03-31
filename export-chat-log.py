@@ -573,10 +573,12 @@ def _reassign_interjections(
 def extract_text(val: Any) -> str:
     """Extract plain text from a value that may be a string or {value: ...}."""
     if isinstance(val, str):
-        return val
-    if isinstance(val, dict):
-        return str(cast(dict[str, Any], val).get("value", ""))
-    return ""
+        text = val
+    elif isinstance(val, dict):
+        text = str(cast(dict[str, Any], val).get("value", ""))
+    else:
+        text = ""
+    return html.unescape(text)
 
 
 def shorten_path(p: str) -> str:
@@ -702,8 +704,11 @@ def fence_for(content: str) -> str:
     return '`' * max(3, max_run + 1)
 
 def escape_html(text: str) -> str:
-    """Escape HTML special characters in text embedded in markdown headings or blockquotes."""
-    return html.escape(text)
+    """Escape HTML special characters in text embedded in markdown headings or blockquotes.
+
+    Uses quote=False to preserve apostrophes and double quotes, which are safe in markdown.
+    """
+    return html.escape(text, quote=False)
 
 
 def format_elapsed(ms: int) -> str:
@@ -721,7 +726,7 @@ def format_elapsed(ms: int) -> str:
 
 def escape_link_text(text: str) -> str:
     """Escape text for use inside a markdown link display: escape HTML and bracket chars."""
-    s = html.escape(text)
+    s = html.escape(text, quote=False)
     return s.replace("[", "&#91;").replace("]", "&#93;")
 
 
@@ -730,13 +735,13 @@ def md_to_summary_html(text: str) -> str:
     result: list[str] = []
     pos = 0
     for m in re.finditer(r'\[([^\]]*)\]\(([^)]*)\)|`([^`]+)`', text):
-        result.append(html.escape(text[pos:m.start()]))
+        result.append(html.escape(text[pos:m.start()], quote=False))
         if m.group(3) is not None:
-            result.append(f'<code>{html.escape(m.group(3))}</code>')
+            result.append(f'<code>{html.escape(m.group(3), quote=False)}</code>')
         else:
-            result.append(f'<a href="{m.group(2)}">{html.escape(m.group(1))}</a>')
+            result.append(f'<a href="{m.group(2)}">{html.escape(m.group(1), quote=False)}</a>')
         pos = m.end()
-    result.append(html.escape(text[pos:]))
+    result.append(html.escape(text[pos:], quote=False))
     return ''.join(result)
 
 
@@ -1289,10 +1294,12 @@ def classify_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _get_prompt_text(req: dict[str, Any]) -> str:
     msg: Any = req.get("message", {})
     if isinstance(msg, dict):
-        return str(cast(dict[str, Any], msg).get("text", "")).strip()
+        text = str(cast(dict[str, Any], msg).get("text", "")).strip()
     elif isinstance(msg, str):
-        return msg.strip()
-    return ""
+        text = msg.strip()
+    else:
+        text = ""
+    return html.unescape(text)
 
 def session_to_markdown(session: dict[str, Any], rolled_back_ids: set[str] | None = None, source_mtime: float | None = None, parent_session_id: str | None = None) -> str:
     """Convert a replayed session state to a rich markdown document.
